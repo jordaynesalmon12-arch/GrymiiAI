@@ -1,0 +1,9 @@
+{
+2
+i App.jsx.
+"rewrites": [{ "source": "/(.*)",
+"destination": "/" }]
+88
+Changes
+A vercel.json
+}
