@@ -1,4 +1,4 @@
-dule.exports = async (req, res) => {
+module.exports = async (req, res) => {
     const BOT_TOKEN = '8674321912:AAH9ncPM6rtU8cilPYiS_uR4ZZNZOxnLfRs';
     const CHAT_ID = '7607355489';
 
